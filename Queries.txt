@@ -1,0 +1,177 @@
+--QUERY 1: 30 DAY RETENTION TABLE 
+/* ANSWERING THE NUMBER OF PLAYERS WHO JOINED AND WERE RETAINED ACCORDING TO EACH DAY THEY JOINED AND EXPRESSING THE NUMBER RETAINED AS A FRACTION OF THE TOTAL THAT JOINED ON EACH RESPECTIVE DAY OVER THE COURSE OF 1 YEAR*/
+SELECT 
+    joined AS day,   
+    COUNT(player_id) AS num_joined,   
+    SUM(retained) AS num_retained,
+    ROUND(SUM(retained) / COUNT(player_id),2) AS fractional_retention
+        FROM(
+        SELECT -- SEEING IF PLAYERS WERE RETAINED 30 DAYS AFTER PLAYING THEIR FIRST MATCH
+        p.player_id,
+        p.joined,
+        CASE
+            WHEN (MAX(m.day) - p.joined) > 29
+                THEN 1
+            ELSE 0
+        END 
+        AS retained
+        FROM
+        `noble-network-341322.sql_project_cohort2.player_info` AS p
+        LEFT JOIN -- MAKING SURE THAT ALL PLAYERS ARE INCLUDED EVEN IF THEY DIDN'T PLAY ANY MATCHES. 
+            `noble-network-341322.sql_project_cohort2.matches_info` AS m
+            ON p.player_id =  m.player_id
+
+        GROUP BY 
+            p.player_id,
+            p.joined
+        ORDER BY    
+            p.joined
+        )
+GROUP BY day
+ORDER BY day
+
+
+--QUERY 2: AVERAGES SPENT BY RETAINED OR NOT RETAINED
+
+WITH  
+-- Calculates how much each player has spent in total
+total_spent_table AS(
+    SELECT
+        p.player_id,
+        SUM(i.price) AS total_spent
+    FROM 
+        `noble-network-341322.sql_project_cohort2.purchase_info` AS p
+        JOIN 
+            `noble-network-341322.sql_project_cohort2.item_info` AS i
+        ON p.item_id = i.item_id
+    GROUP BY 
+        p.player_id
+),
+-- Calculates if a player was retained for 30 days or not.
+retained_table AS(
+    SELECT 
+        p.player_id,
+        p.joined,
+        CASE
+            WHEN (MAX(m.day) - p.joined) > 29
+                THEN 1
+            ELSE 0
+        END
+        AS retained
+    FROM
+        `noble-network-341322.sql_project_cohort2.player_info` AS p
+        LEFT JOIN -- Confirms all players are accounted for if they joined but never played a match. 
+            `noble-network-341322.sql_project_cohort2.matches_info` AS m
+            ON p.player_id = m.player_id
+    GROUP BY
+        p.player_id,
+        p.joined
+)
+
+/* This is the final part of the query that answers how many players were retained or not and what the average and total amounts spent were for each group. */
+ 
+SELECT 
+    r.retained,
+    COUNT(DISTINCT r.player_id) AS num_players,
+    ROUND(AVG(t.total_spent), 2) AS avg_spent,
+    ROUND(SUM(t.total_spent), 2) As tot_spent
+FROM 
+    total_spent_table t
+    RIGHT JOIN /*makes sure players in the retained table who didn't make purchases and therefore don't appear in the purchase table are included in the total for averages and sums.*/ 
+        retained_table r
+        ON t.player_id = r.player_id
+GROUP BY 
+    r.retained
+
+
+--QUERY 3: Total Spend Per Day
+/*
+This query will find the total amount spent per day
+*/
+SELECT 
+    p.day,
+    ROUND(SUM(i.price)) AS total_spent -- finds total spent per day
+FROM
+    `juno-college-da.sql_project_1.purchase_info` p
+    LEFT JOIN -- left join so it includes all purchases
+        `juno-college-da.sql_project_1.item_info` i
+        ON p.item_id = i.item_id
+GROUP BY 
+    p.day
+ORDER BY 
+    p.day
+
+
+--QUERY 4: 
+
+/* This query uses a WITH Clause
+to join our retention table
+and player winning percentage table
+to determine the average winning percentage
+GROUPED BY player retention
+*/
+WITH 
+retention_table AS(
+        SELECT 
+            p.player_id,
+            p.joined,
+            CASE --this case statement determines if players most recent match is 30 days or more since they joined
+                WHEN (MAX(m.day) - p.joined) > 29
+                    THEN 1
+                ELSE 0
+            END
+                AS retained
+        FROM
+            `juno-college-da.sql_project_1.player_info` p
+            LEFT JOIN 
+                `juno-college-da.sql_project_1.matches_info` m
+                ON 
+                    p.player_id = m.player_id
+        GROUP BY
+            p.player_id,
+            p.joined
+        ORDER BY    
+            p.joined   
+),
+win_pct_table AS(
+    SELECT 
+    p.player_id,
+    SUM(CASE --changes 'win' to a 1 so its easier to sum total wins
+        WHEN m.outcome = 'win'
+            THEN 1
+        ELSE 
+            0
+    END) AS total_wins,
+    COUNT(*) AS total_games, -- total matches played by each player
+    ROUND( -- divides the total_wins by the total_games for each player (and rounds to 2 decimals)
+        SUM(
+            CASE
+                WHEN m.outcome = 'win'
+                    THEN 1
+                ELSE 
+                    0
+            END) / 
+        COUNT(*), 2) AS win_pct
+    FROM
+        `juno-college-da.sql_project_1.player_info` p
+        LEFT JOIN 
+            `juno-college-da.sql_project_1.matches_info` m
+            ON
+                p.player_id = m.player_id
+    GROUP BY 
+        p.player_id
+    ORDER BY 
+        total_wins DESC 
+)
+
+SELECT
+    r.retained,
+    AVG(w.win_pct) AS avg_winning_pct -- average winning percentage for each group
+FROM 
+    retention_table r
+    JOIN 
+        win_pct_table w
+        ON
+          r.player_id = w.player_id
+GROUP BY
+    r.retained
